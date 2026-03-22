@@ -1,0 +1,4 @@
+.env
+__pycache__/
+training/AI_Human.csv
+training/data_ghostbot.csv
