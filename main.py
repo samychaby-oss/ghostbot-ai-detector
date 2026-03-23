@@ -14,7 +14,7 @@ os.environ['PYTHONWARNINGS'] = 'ignore'
 app = FastAPI()
 
 # On écrit l'adresse en dur pour être sûr que ça marche
-DATABASE_URL = "postgresql://ton_utilisateur:ton_mot_de_passe@dpg-xxx-a.oregon-postgres.render.com/projet_s"
+DATABASE_URL = "postgresql://amine:3HINAdOayp2boRkjiPLMVxHYaOjSLkjx@dpg-d70gbuv5gffc73ds859g-a.frankfurt-postgres.render.com/projet_s"
 
 if DATABASE_URL:
     # Render donne souvent postgres://, mais SQLAlchemy a besoin de postgresql://
