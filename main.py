@@ -4,30 +4,30 @@ import re
 import pickle
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from sqlalchemy import create_engine, text
-from dotenv import load_dotenv # <--- Ajoute ça
+from dotenv import load_dotenv
 
-# 1. Charger les variables d'environnement
+# 1. Configuration initiale
 load_dotenv()
-
 warnings.filterwarnings("ignore")
 os.environ['PYTHONWARNINGS'] = 'ignore'
 
 app = FastAPI()
 
-# 2. Construction dynamique de l'URL de connexion
-# Si os.getenv ne trouve rien, il utilisera la valeur par défaut après la virgule
-USER = os.getenv("DB_USER", "postgres")
-PASSWORD = os.getenv("DB_PASSWORD", "")
-HOST = os.getenv("DB_HOST", "localhost")
-PORT = os.getenv("DB_PORT", "5432")
-NAME = os.getenv("DB_NAME", "projet_s")
+# 2. Connexion à la Base de Données (CORRIGÉE POUR RENDER)
+# On récupère l'URL complète que tu as mise dans l'onglet Environment
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-DATABASE_URL = f"postgresql://{USER}:{PASSWORD}@{HOST}:{PORT}/{NAME}"
+if DATABASE_URL:
+    # Render donne souvent postgres://, mais SQLAlchemy a besoin de postgresql://
+    if DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+else:
+    # Version de secours si tu testes sur ton PC en local
+    DATABASE_URL = "postgresql://postgres:ton_pass@localhost:5432/projet_s"
+
 engine = create_engine(DATABASE_URL)
 
 def load_model():
-    # En entreprise, ici on ajouterait une logique pour vérifier si le modèle 
-    # doit être téléchargé depuis le Cloud ou lu localement
     try:
         with open('models_bundle.pkl', 'rb') as f:
             return pickle.load(f)
@@ -38,28 +38,32 @@ def load_model():
 async def analyze_file(file: UploadFile = File(...)):
     pipeline = load_model()
     if not pipeline:
-        raise HTTPException(status_code=500, detail="Modèle non trouvé.")
+        raise HTTPException(status_code=500, detail="Modèle models_bundle.pkl non trouvé.")
     
     model_name = type(pipeline.named_steps['clf']).__name__
     content = await file.read()
     
-    # ... (Le reste de ton code reste exactement le même)
     try:
         text_content = content.decode("utf-8")
     except UnicodeDecodeError:
         text_content = content.decode("latin-1")
     
+    # Découpage en phrases
     sentences = [s.strip() for s in re.split(r'[.!?\n]+', text_content) if len(s.strip()) > 2]
     results = []
 
     try:
         with engine.begin() as conn:
             for s in sentences:
+                # Prediction
                 probs = pipeline.predict_proba([s])[0]
                 score_ia = round(float(probs[1] * 100), 2)
                 verdict = "IA" if score_ia > 30 else "Humain"
+                
+                # Nettoyage pour SQL
                 clean_sentence = s.replace('\x00', '') 
 
+                # Insertion SQL
                 query = text("""
                     INSERT INTO resultats_detailles 
                     (texte_extrait, score_ia_num, verdict, nom_document, modele_utilise) 
@@ -76,4 +80,5 @@ async def analyze_file(file: UploadFile = File(...)):
         return {"filename": file.filename, "modele": model_name, "analyse": results}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Si ça plante ici, c'est l'URL de la DB qui est mauvaise
+        raise HTTPException(status_code=500, detail=f"Erreur Database: {str(e)}")
