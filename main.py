@@ -20,7 +20,6 @@ engine = create_engine(DATABASE_URL)
 # 3. Chargement du modèle IA
 def load_model():
     try:
-        # Assure-toi que ce fichier est bien à la racine de ton projet GitHub
         with open('models_bundle.pkl', 'rb') as f:
             return pickle.load(f)
     except FileNotFoundError:
@@ -28,48 +27,41 @@ def load_model():
 
 @app.get("/")
 def home():
-    return {"status": "GhostBot Live", "database": "Connected to resultats_detailles"}
+    return {"status": "GhostBot Live", "mode": "Single Execution Save"}
 
 @app.post("/analyze-file/")
 async def analyze_file(file: UploadFile = File(...)):
-    # Réveil du modèle
     pipeline = load_model()
     if not pipeline:
-        raise HTTPException(status_code=500, detail="Fichier models_bundle.pkl introuvable sur le serveur.")
+        raise HTTPException(status_code=500, detail="Fichier models_bundle.pkl introuvable.")
     
-    # Identification du modèle (ex: MultinomialNB ou GradientBoosting)
     model_name = type(pipeline.named_steps['clf']).__name__
-    
-    # Lecture du contenu du fichier
     content = await file.read()
+    
     try:
         text_content = content.decode("utf-8")
     except UnicodeDecodeError:
         text_content = content.decode("latin-1")
     
-    # Découpage du texte en phrases propres
     sentences = [s.strip() for s in re.split(r'[.!?\n]+', text_content) if len(s.strip()) > 5]
     
     if not sentences:
-        return {"error": "Le texte est vide ou trop court."}
+        return {"error": "Texte trop court."}
 
     results_list = []
 
     try:
-        # On ouvre la connexion pour enregistrer dans TA table pgAdmin
         with engine.begin() as conn:
+            # --- ÉTAPE CRUCIALE : ON VIDE LA TABLE AVANT D'ÉCRIRE ---
+            # Cela permet de ne garder QUE l'exécution présente
+            conn.execute(text("TRUNCATE TABLE resultats_detailles;"))
+            
             for s in sentences:
-                # Calcul de la probabilité IA
                 probs = pipeline.predict_proba([s])[0]
                 score_ia = round(float(probs[1] * 100), 2)
-                
-                # Verdict basé sur ton seuil
                 verdict = "IA" if score_ia > 40 else "Humain"
-                
-                # Nettoyage anti-bug SQL
                 clean_text = s.replace('\x00', '')
 
-                # INSERTION DANS TA TABLE : resultats_detailles
                 query = text("""
                     INSERT INTO resultats_detailles 
                     (texte_extrait, score_ia_num, verdict, nom_document, modele_utilise) 
@@ -77,29 +69,23 @@ async def analyze_file(file: UploadFile = File(...)):
                 """)
                 
                 conn.execute(query, {
-                    "t": clean_text, 
-                    "s": score_ia, 
-                    "v": verdict,
-                    "doc": file.filename, 
-                    "mod": model_name
+                    "t": clean_text, "s": score_ia, "v": verdict,
+                    "doc": file.filename, "mod": model_name
                 })
                 
-                # Préparation de l'affichage pour Swagger
                 results_list.append({
                     "phrase": clean_text[:100] + "...", 
                     "score": f"{score_ia}%", 
                     "verdict": verdict
                 })
         
-        # Réponse finale envoyée à l'écran
         return {
-            "status": "Success",
+            "status": "Success - Table Refreshed",
             "document": file.filename, 
-            "model_used": model_name, 
+            "model": model_name, 
             "total_phrases": len(results_list),
             "analyses": results_list
         }
 
     except Exception as e:
-        # En cas d'erreur avec la base pgAdmin
         raise HTTPException(status_code=500, detail=f"Erreur SQL : {str(e)}")
