@@ -13,31 +13,50 @@ os.environ['PYTHONWARNINGS'] = 'ignore'
 
 app = FastAPI()
 
-# On écrit l'adresse en dur pour être sûr que ça marche
+# 2. Connexion à la base de données (URL EXTERNE DE FRANCFORT)
 DATABASE_URL = "postgresql://amine:3HINAdOayp2boRkjiPLMVxHYaOjSLkjx@dpg-d70gbuv5gffc73ds859g-a.frankfurt-postgres.render.com/projet_s"
-
-if DATABASE_URL:
-    # Render donne souvent postgres://, mais SQLAlchemy a besoin de postgresql://
-    if DATABASE_URL.startswith("postgres://"):
-        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-else:
-    # Version de secours si tu testes sur ton PC en local
-    DATABASE_URL = "postgresql://postgres:ton_pass@localhost:5432/projet_s"
 
 engine = create_engine(DATABASE_URL)
 
+# 3. Création automatique de la table au démarrage
+def init_db():
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS resultats_detailles (
+                    id SERIAL PRIMARY KEY,
+                    texte_extrait TEXT,
+                    score_ia_num FLOAT,
+                    verdict VARCHAR(50),
+                    nom_document VARCHAR(255),
+                    modele_utilise VARCHAR(100),
+                    date_analyse TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """))
+            print("Base de données initialisée avec succès.")
+    except Exception as e:
+        print(f"Erreur lors de l'initialisation de la DB : {e}")
+
+# Lancer l'initialisation
+init_db()
+
 def load_model():
     try:
+        # Assure-toi que ce fichier est bien à la racine de ton dossier GhostBot_Project
         with open('models_bundle.pkl', 'rb') as f:
             return pickle.load(f)
     except FileNotFoundError:
         return None
 
+@app.get("/")
+def home():
+    return {"status": "GhostBot API is running", "database": "Connected"}
+
 @app.post("/analyze-file/")
 async def analyze_file(file: UploadFile = File(...)):
     pipeline = load_model()
     if not pipeline:
-        raise HTTPException(status_code=500, detail="Modèle models_bundle.pkl non trouvé.")
+        raise HTTPException(status_code=500, detail="Modèle models_bundle.pkl non trouvé sur le serveur.")
     
     model_name = type(pipeline.named_steps['clf']).__name__
     content = await file.read()
@@ -48,13 +67,17 @@ async def analyze_file(file: UploadFile = File(...)):
         text_content = content.decode("latin-1")
     
     # Découpage en phrases
-    sentences = [s.strip() for s in re.split(r'[.!?\n]+', text_content) if len(s.strip()) > 2]
+    sentences = [s.strip() for s in re.split(r'[.!?\n]+', text_content) if len(s.strip()) > 5]
+    
+    if not sentences:
+        return {"error": "Le fichier est vide ou trop court."}
+
     results = []
 
     try:
         with engine.begin() as conn:
             for s in sentences:
-                # Prediction
+                # Prédiction
                 probs = pipeline.predict_proba([s])[0]
                 score_ia = round(float(probs[1] * 100), 2)
                 verdict = "IA" if score_ia > 30 else "Humain"
@@ -70,14 +93,26 @@ async def analyze_file(file: UploadFile = File(...)):
                 """)
                 
                 conn.execute(query, {
-                    "t": clean_sentence, "s": score_ia, "v": verdict,
-                    "doc": file.filename, "mod": model_name
+                    "t": clean_sentence, 
+                    "s": score_ia, 
+                    "v": verdict,
+                    "doc": file.filename, 
+                    "mod": model_name
                 })
                 
-                results.append({"phrase": clean_sentence, "score": f"{score_ia}%", "verdict": verdict})
+                results.append({
+                    "phrase": clean_sentence[:100] + "...", 
+                    "score": f"{score_ia}%", 
+                    "verdict": verdict
+                })
         
-        return {"filename": file.filename, "modele": model_name, "analyse": results}
+        return {
+            "status": "Success",
+            "filename": file.filename, 
+            "modele": model_name, 
+            "nb_phrases": len(sentences),
+            "analyse": results
+        }
 
     except Exception as e:
-        # Si ça plante ici, c'est l'URL de la DB qui est mauvaise
         raise HTTPException(status_code=500, detail=f"Erreur Database: {str(e)}")
