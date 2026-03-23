@@ -13,9 +13,8 @@ os.environ['PYTHONWARNINGS'] = 'ignore'
 
 app = FastAPI()
 
-# 2. Connexion à la Base de Données (CORRIGÉE POUR RENDER)
-# On récupère l'URL complète que tu as mise dans l'onglet Environment
-DATABASE_URL = os.getenv("DATABASE_URL")
+# On écrit l'adresse en dur pour être sûr que ça marche
+DATABASE_URL = "postgresql://ton_utilisateur:ton_mot_de_passe@dpg-xxx-a.oregon-postgres.render.com/projet_s"
 
 if DATABASE_URL:
     # Render donne souvent postgres://, mais SQLAlchemy a besoin de postgresql://
