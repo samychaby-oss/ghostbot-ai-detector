@@ -6,19 +6,18 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 
-# 1. Configuration initiale
+# 1. Configuration et Silence des warnings
 load_dotenv()
 warnings.filterwarnings("ignore")
 os.environ['PYTHONWARNINGS'] = 'ignore'
 
 app = FastAPI()
 
-# 2. Connexion à la base de données (URL EXTERNE DE FRANCFORT)
+# 2. Connexion à la base de données (URL EXTERNE FRANCFORT)
 DATABASE_URL = "postgresql://amine:3HINAdOayp2boRkjiPLMVxHYaOjSLkjx@dpg-d70gbuv5gffc73ds859g-a.frankfurt-postgres.render.com/projet_s"
-
 engine = create_engine(DATABASE_URL)
 
-# 3. Création automatique de la table au démarrage
+# 3. FONCTION MAGIQUE : Crée la table automatiquement au démarrage
 def init_db():
     try:
         with engine.begin() as conn:
@@ -33,16 +32,16 @@ def init_db():
                     date_analyse TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             """))
-            print("Base de données initialisée avec succès.")
+        print("--- LA TABLE SQL EST PRÊTE ---")
     except Exception as e:
-        print(f"Erreur lors de l'initialisation de la DB : {e}")
+        print(f"--- ERREUR DB : {e} ---")
 
-# Lancer l'initialisation
+# Lancement de l'initialisation automatique
 init_db()
 
+# 4. Chargement du modèle IA
 def load_model():
     try:
-        # Assure-toi que ce fichier est bien à la racine de ton dossier GhostBot_Project
         with open('models_bundle.pkl', 'rb') as f:
             return pickle.load(f)
     except FileNotFoundError:
@@ -50,13 +49,13 @@ def load_model():
 
 @app.get("/")
 def home():
-    return {"status": "GhostBot API is running", "database": "Connected"}
+    return {"status": "GhostBot Live", "db_status": "Connected"}
 
 @app.post("/analyze-file/")
 async def analyze_file(file: UploadFile = File(...)):
     pipeline = load_model()
     if not pipeline:
-        raise HTTPException(status_code=500, detail="Modèle models_bundle.pkl non trouvé sur le serveur.")
+        raise HTTPException(status_code=500, detail="Fichier models_bundle.pkl introuvable.")
     
     model_name = type(pipeline.named_steps['clf']).__name__
     content = await file.read()
@@ -66,26 +65,26 @@ async def analyze_file(file: UploadFile = File(...)):
     except UnicodeDecodeError:
         text_content = content.decode("latin-1")
     
-    # Découpage en phrases
+    # Découpage du texte en phrases
     sentences = [s.strip() for s in re.split(r'[.!?\n]+', text_content) if len(s.strip()) > 5]
     
     if not sentences:
-        return {"error": "Le fichier est vide ou trop court."}
+        return {"error": "Texte trop court pour analyse."}
 
     results = []
 
     try:
         with engine.begin() as conn:
             for s in sentences:
-                # Prédiction
+                # Prédiction du modèle
                 probs = pipeline.predict_proba([s])[0]
                 score_ia = round(float(probs[1] * 100), 2)
-                verdict = "IA" if score_ia > 30 else "Humain"
+                verdict = "IA" if score_ia > 40 else "Humain" # Seuil ajusté
                 
-                # Nettoyage pour SQL
-                clean_sentence = s.replace('\x00', '') 
+                # Nettoyage pour éviter les erreurs SQL
+                clean_s = s.replace('\x00', '') 
 
-                # Insertion SQL
+                # Insertion dans la base de données
                 query = text("""
                     INSERT INTO resultats_detailles 
                     (texte_extrait, score_ia_num, verdict, nom_document, modele_utilise) 
@@ -93,7 +92,7 @@ async def analyze_file(file: UploadFile = File(...)):
                 """)
                 
                 conn.execute(query, {
-                    "t": clean_sentence, 
+                    "t": clean_s, 
                     "s": score_ia, 
                     "v": verdict,
                     "doc": file.filename, 
@@ -101,17 +100,16 @@ async def analyze_file(file: UploadFile = File(...)):
                 })
                 
                 results.append({
-                    "phrase": clean_sentence[:100] + "...", 
-                    "score": f"{score_ia}%", 
+                    "phrase": clean_s[:100] + "...", 
+                    "score_ia": f"{score_ia}%", 
                     "verdict": verdict
                 })
         
         return {
             "status": "Success",
-            "filename": file.filename, 
-            "modele": model_name, 
-            "nb_phrases": len(sentences),
-            "analyse": results
+            "document": file.filename, 
+            "model": model_name, 
+            "results": results
         }
 
     except Exception as e:
